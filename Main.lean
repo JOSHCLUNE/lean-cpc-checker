@@ -48,13 +48,13 @@ def solve' (query : String) : IO (Except Error Proof) := do
       return ps[0]
     throw (Error.error s!"Expected a proof, got none")
 
-def checkAndPrintLogs (pf : cvc5.Proof) : MetaM Unit := do
+def checkAndPrintLogs (fileName : String) (pf : cvc5.Proof) : MetaM Unit := do
   activateScoped `Classical
-  tryQuerySMT pf -- checkProof pf
+  tryQuerySMT fileName pf -- checkProof pf
   printTraces
   Language.reportMessages (← Core.getMessageLog) (← getOptions)
 
-unsafe def solveAndCheck' (query : String) : IO Unit := do
+unsafe def solveAndCheck' (fileName query : String) : IO Unit := do
   let t0 ← IO.monoMsNow
   let r ← solve' query
   let t1 ← IO.monoMsNow
@@ -70,10 +70,11 @@ unsafe def solveAndCheck' (query : String) : IO Unit := do
       -- IO.printlnAndFlush s!"[time] load: {t1 - t0}"
       let coreContext := { fileName := "cpc-checker", fileMap := default }
       let coreState := { env }
-      _ ← Meta.MetaM.toIO (checkAndPrintLogs pf) coreContext coreState
+      _ ← Meta.MetaM.toIO (checkAndPrintLogs fileName pf) coreContext coreState
 
 end Checker
 
 unsafe def main (args : List String) : IO Unit := do
+  let fileName := args[0]!
   let query ← IO.FS.readFile args[0]!
-  Checker.solveAndCheck' query
+  Checker.solveAndCheck' fileName query

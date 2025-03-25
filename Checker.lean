@@ -125,39 +125,38 @@ def useQuerySMT (externalProverTimeout : Nat) (ignoreHints : Bool) : TacticM Uni
   withOptions (fun o => ((o.set ``auto.tptp.timeout externalProverTimeout).set ``duper.maxSaturationTime externalProverTimeout).set ``querySMT.ignoreHints ignoreHints) do
     evalTactic (← `(tactic| querySMT))
 
-def tryQuerySMT (pf : cvc5.Proof) : MetaM Unit := withTraceNode `tryQuerySMT trace do
-  IO.printlnAndFlush s!"[{decl_name%}] About to call tryQuerySMT"
+def tryQuerySMT (fileName : String) (pf : cvc5.Proof) : MetaM Unit := withTraceNode `tryQuerySMT trace do
+  -- IO.printlnAndFlush s!"[{decl_name%}] About to call tryQuerySMT"
   withDecls (getUninterpretedSorts pf.getResult).toArray (getFreeVars pf.getResult).toArray fun fvNames xs => do
-    IO.printlnAndFlush s!"[{decl_name%}] Got past withDecls"
+    -- IO.printlnAndFlush s!"[{decl_name%}] Got past withDecls"
     let (type, _, _) ← Smt.reconstructProof pf fvNames
-    IO.printlnAndFlush s!"[{decl_name%}] Got past reconstructProof"
+    -- IO.printlnAndFlush s!"[{decl_name%}] Got past reconstructProof"
     let type ← Meta.mkForallFVars xs type
-    IO.printlnAndFlush s!"[{decl_name%}] Got past mkForallFVars"
+    -- IO.printlnAndFlush s!"[{decl_name%}] Got past mkForallFVars"
     let goalMVar ← Meta.mkFreshExprMVar type
-    IO.printlnAndFlush s!"[{decl_name%}] Got past mkFreshExprMVar"
+    -- IO.printlnAndFlush s!"[{decl_name%}] Got past mkFreshExprMVar"
     let goalMVarId := goalMVar.mvarId!
     try
       TermElabM.run' (do
-        -- withOptions (fun o => o.set `macRecDepth 100000000) $ withOptions (fun o => o.set `pp.analyze true) $ withOptions (fun o => o.set `pp.rawOnError true) $ logInfo m!"About to use querySMT on {type}"
         goalMVarId.withContext do
-          let env ← getEnv
-          let mctx ← getMCtx
-          let lctx ← getLCtx
-          IO.printlnAndFlush (← ppGoal {env := env, mctx := mctx, lctx := lctx} goalMVarId)
+          -- let env ← getEnv
+          -- let mctx ← getMCtx
+          -- let lctx ← getLCtx
+          -- IO.printlnAndFlush (← ppGoal {env := env, mctx := mctx, lctx := lctx} goalMVarId)
         let gs ← Tactic.run goalMVarId $ useQuerySMT 10 false
         match gs with
-        | [] => logInfo "Success"
+        | [] => logInfo m!"{fileName} :: Success"
         | _ :: _ => logInfo "Subgoals")
         (ctx := {declName? := `fakeDecl, errToSorry := false})
     catch e =>
-      if ← QuerySMT.errorIsSkolemizationError e then logInfo m!"skolemizationFailure ({e.toMessageData})" -- pure .skolemizationFailure
-      else if ← QuerySMT.errorIsTranslationError e then logInfo m!"smtTranslationFailure ({e.toMessageData})" -- pure .smtTranslationFailure
-      else if ← QuerySMT.errorIsSolverError e then logInfo m!"externalProverFailure ({e.toMessageData})" -- pure .externalProverFailure
-      else if ← QuerySMT.errorIsHintParsingError e then logInfo m!"hintParsingFailure ({e.toMessageData})" -- pure .hintParsingFailure
-      else if ← QuerySMT.errorIsSelectorConstructionError e then logInfo m!"selectorConstructionFailure ({e.toMessageData})" -- pure .selectorConstructionFailure
-      else if ← QuerySMT.errorIsDuperError e then logInfo m!"duperFailure ({e.toMessageData})" -- pure .duperFailure
-      else if ← QuerySMT.errorIsProofFitError e then logInfo m!"proofFitFailure ({e.toMessageData})" -- pure .proofFitFailure
-      else logInfo m!"miscFailure ({e.toMessageData})" -- pure .miscFailure
+      if ← QuerySMT.errorIsSkolemizationError e then logInfo m!"{fileName} :: skolemizationFailure ({e.toMessageData})"
+      else if ← QuerySMT.errorIsTranslationError e then logInfo m!"{fileName} :: smtTranslationFailure ({e.toMessageData})"
+      else if ← QuerySMT.errorIsSolverError e then logInfo m!"{fileName} :: externalProverFailure ({e.toMessageData})"
+      else if ← QuerySMT.errorIsHintParsingError e then logInfo m!"{fileName} :: hintParsingFailure ({e.toMessageData})"
+      else if ← QuerySMT.errorIsSelectorConstructionError e then logInfo m!"{fileName} :: selectorConstructionFailure ({e.toMessageData})"
+      else if ← QuerySMT.errorIsDuperError e then logInfo m!"{fileName} :: duperFailure ({e.toMessageData})"
+      else if ← QuerySMT.errorIsProofFitError e then logInfo m!"{fileName} :: proofFitFailure ({e.toMessageData})"
+      else logInfo m!"{fileName} :: miscFailure ({e.toMessageData})"
 
 def solveAndCheck (query : String) : MetaM Unit := withTraceNode `solveAndCheck trace do
   let t0 ← IO.monoMsNow
