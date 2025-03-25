@@ -1,4 +1,5 @@
 import Checker
+import QuerySMT
 
 open Lean
 
@@ -23,10 +24,13 @@ open Lean
 -- ]
 
 def module : Array Import := #[
-  `Definitions
+  `Definitions,
+  `QuerySMT
 ]
 
 namespace Checker
+
+#version
 
 open cvc5 in
 def solve' (query : String) : IO (Except Error Proof) := do
@@ -46,7 +50,7 @@ def solve' (query : String) : IO (Except Error Proof) := do
 
 def checkAndPrintLogs (pf : cvc5.Proof) : MetaM Unit := do
   activateScoped `Classical
-  checkProof pf
+  tryQuerySMT pf -- checkProof pf
   printTraces
   Language.reportMessages (← Core.getMessageLog) (← getOptions)
 
@@ -54,7 +58,7 @@ unsafe def solveAndCheck' (query : String) : IO Unit := do
   let t0 ← IO.monoMsNow
   let r ← solve' query
   let t1 ← IO.monoMsNow
-  IO.printlnAndFlush s!"[time] solve: {t1 - t0}"
+  -- IO.printlnAndFlush s!"[time] solve: {t1 - t0}"
   match r with
   | .error e =>
     IO.eprintln (repr e)
@@ -63,7 +67,7 @@ unsafe def solveAndCheck' (query : String) : IO Unit := do
     initSearchPath (← findSysroot)
     withImportModules module Options.empty 0 fun env => do
       let t1 ← IO.monoMsNow
-      IO.printlnAndFlush s!"[time] load: {t1 - t0}"
+      -- IO.printlnAndFlush s!"[time] load: {t1 - t0}"
       let coreContext := { fileName := "cpc-checker", fileMap := default }
       let coreState := { env }
       _ ← Meta.MetaM.toIO (checkAndPrintLogs pf) coreContext coreState

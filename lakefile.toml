@@ -17,3 +17,8 @@ supportInterpreter = true
 name = "smt"
 git = "https://github.com/abdoo8080/lean-smt"
 rev = "2952967007ca3add2ca2551d864c5f13c203f1a9"
+
+[[require]]
+name = "QuerySMT"
+git = "https://github.com/JOSHCLUNE/LeanSMTParser"
+rev = "v4.15.0"
