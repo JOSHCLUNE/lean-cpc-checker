@@ -26,7 +26,7 @@ def solve (query : String) : MetaM (Except Error Proof) := withTraceNode `solve 
     Solver.setOption "produce-proofs" "true"
     Solver.setOption "proof-elim-subtypes" "true"
     Solver.setOption "proof-granularity" "dsl-rewrite"
-    Solver.parse query
+    Solver.parseCommands query
     let ps ← Solver.getProof
     if h : 0 < ps.size then
       return ps[0]
@@ -173,7 +173,7 @@ def solveAndCheck (query : String) : MetaM Unit := withTraceNode `solveAndCheck 
 def runSolveAndCheck (query : String) : MetaM Unit := do
   solveAndCheck query
   printTraces
-  Language.reportMessages (← Core.getMessageLog) (← getOptions)
+  _ ← Language.reportMessages (← Core.getMessageLog) (← getOptions)
 
 def elabSolveAndCheck (path : String) : Elab.Command.CommandElabM Unit := do
   let query ← IO.FS.readFile path

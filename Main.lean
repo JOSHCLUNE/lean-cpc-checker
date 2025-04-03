@@ -42,7 +42,7 @@ def solve' (query : String) : IO (Except Error Proof) := do
     Solver.setOption "produce-proofs" "true"
     Solver.setOption "proof-elim-subtypes" "true"
     Solver.setOption "proof-granularity" "dsl-rewrite"
-    Solver.parse query
+    Solver.parseCommands query
     let ps ← Solver.getProof
     if h : 0 < ps.size then
       return ps[0]
@@ -52,7 +52,7 @@ def checkAndPrintLogs (fileName : String) (pf : cvc5.Proof) : MetaM Unit := do
   activateScoped `Classical
   tryQuerySMT fileName pf -- checkProof pf
   printTraces
-  Language.reportMessages (← Core.getMessageLog) (← getOptions)
+  _ ← Language.reportMessages (← Core.getMessageLog) (← getOptions)
 
 unsafe def solveAndCheck' (fileName query : String) : IO Unit := do
   let t0 ← IO.monoMsNow

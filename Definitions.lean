@@ -93,6 +93,65 @@ theorem ite_congr' {α} [Decidable c₁] [Decidable c₂] {x₁ x₂ y₁ y₂ :
 
 namespace Smt.Reconstruct.Builtin
 
+class Absorb (mul : α → α → α) where
+  zero : α
+  /-- Zero is a left absorbing element for multiplication -/
+  zero_mul : ∀ (a : α), mul zero a = zero
+  /-- Zero is a right absorbing element for multiplication -/
+  mul_zero : ∀ (a : α), mul a zero = zero
+
+instance : Absorb And where
+  zero_mul := false_and
+  mul_zero := and_false
+
+instance : Absorb Or where
+  zero_mul := true_or
+  mul_zero := or_true
+
+instance : @Absorb Int (· * ·) where
+  zero_mul := Int.zero_mul
+  mul_zero := Int.mul_zero
+
+namespace Absorb
+
+def Context α := Nat → α
+
+inductive Expr where
+  | zero
+  | atom (v : Nat)
+  | op (l r : Expr)
+deriving Inhabited, Repr
+
+namespace Expr
+
+def containsZero : Expr → Bool
+  | Expr.zero   => true
+  | Expr.atom _ => false
+  | Expr.op l r => containsZero l || containsZero r
+
+def eval [hα : @Absorb α mul] (ctx : Context α) : Expr → α
+  | Expr.zero   => hα.zero
+  | Expr.atom v => ctx v
+  | Expr.op l r => mul (eval (hα := hα) ctx l) (eval (hα := hα) ctx r)
+
+theorem eval_eq_zero_from_containsZero [hα : @Absorb α mul] (ctx : Context α) (h : containsZero e) :
+  eval (hα := hα) ctx e = hα.zero := by
+  induction e with
+  | zero   => rfl
+  | atom v => contradiction
+  | op l r ih₁ ih₂ =>
+    unfold eval
+    simp only [containsZero, Bool.or_eq_true] at h
+    cases h <;> rename_i h
+    · rw [ih₁ h, hα.zero_mul]
+    · rw [ih₂ h, hα.mul_zero]
+
+end Expr
+
+end Smt.Reconstruct.Builtin.Absorb
+
+namespace Smt.Reconstruct.Builtin
+
 theorem iteElim1 [hc : Decidable c] : ite c a b → ¬ c ∨ a := by
   intros h
   cases hc with
@@ -242,6 +301,37 @@ private def uncurry {p₁ p₂ p₃ : Prop} : (p₁ → p₂ → p₃) → (p₁
   exact h₁ ht₁ ht₂
 
 namespace Int
+
+protected def abs (x : Int) : Int :=
+  if x < 0 then -x else x
+
+def addN : List Int → Int
+  | []      => 0
+  | [x]     => x
+  | x :: xs => x + addN xs
+
+@[simp] theorem addN_append : addN (xs ++ ys) = addN xs + addN ys := by
+  match xs, ys with
+  | [], _
+  | [x], []
+  | [x], y :: ys       => simp [addN]
+  | x₁ :: x₂ :: xs, ys =>
+    rw [List.cons_append, addN, addN, addN_append, Int.add_assoc]
+    all_goals (intro h; nomatch h)
+
+def mulN : List Int → Int
+  | []      => 1
+  | [x]     => x
+  | x :: xs => x * mulN xs
+
+@[simp] theorem mulN_append : mulN (xs ++ ys) = mulN xs * mulN ys := by
+  match xs, ys with
+  | [], _
+  | [x], []
+  | [x], y :: ys       => simp [mulN]
+  | x₁ :: x₂ :: xs, ys =>
+    rw [List.cons_append, mulN, mulN, mulN_append, Int.mul_assoc]
+    all_goals (intro h; nomatch h)
 
 @[simp]
 protected theorem natCast_eq_zero {n : Nat} : (n : Int) = 0 ↔ n = 0 := by
@@ -711,7 +801,7 @@ theorem foldl_mul_insert {ctx : Context} :
   List.foldl (fun z a => z * (ctx a)) 1 (mul.insert y ys) =
   (ctx y) * List.foldl (fun z a => z * (ctx a)) 1 ys := by
   induction ys with
-  | nil => simp [List.foldl]
+  | nil => simp [mul.insert]
   | cons x ys ih =>
     by_cases h : y ≤ x
     · simp [mul.insert, h, foldl_assoc Int.mul_assoc (ctx y) (ctx x), Int.mul_assoc]
@@ -905,26 +995,27 @@ open Function
 
 -- https://github.com/cvc5/cvc5/blob/main/src/theory/arith/rewrites
 
-variable {t ts x xs : Int}
+variable {t s x : Int}
 
-theorem mul_one : ts * 1 * ss = ts * ss :=
-  (_root_.Int.mul_one ts).symm ▸ rfl
-theorem mul_zero : ts * 0 * ss = 0 :=
-  (_root_.Int.mul_zero ts).symm ▸ (Int.zero_mul ss).symm ▸ rfl
-
-theorem div_total {t s : Int} : s ≠ 0 → t / s = t / s :=
+theorem div_total : s ≠ 0 → t / s = t / s :=
   const _ rfl
-theorem div_total_one {t : Int} : t / 1 = t :=
+theorem div_total_one : t / 1 = t :=
   Int.ediv_one t
-theorem div_total_zero {t : Int} : t / 0 = 0 :=
+theorem div_total_zero : t / 0 = 0 :=
   Int.ediv_zero t
 
-theorem mod_total {t s : Int} : s ≠ 0 → t % s = t % s :=
+theorem div_total_neg : t / s = -(t / -s) :=
+  Int.ediv_neg t s ▸ Int.neg_neg _ ▸ rfl
+
+theorem mod_total : s ≠ 0 → t % s = t % s :=
   const _ rfl
-theorem mod_total_one {t : Int} : t % 1 = 0 :=
+theorem mod_total_one : t % 1 = 0 :=
   Int.emod_one t
-theorem mod_total_zero {t : Int} : t % 0 = t :=
+theorem mod_total_zero : t % 0 = t :=
   Int.emod_zero t
+
+theorem mod_total_neg : t % s = t % -s :=
+  Int.emod_neg t s ▸ rfl
 
 -- Eliminations
 
@@ -932,18 +1023,18 @@ theorem elim_gt : (t > s) = ¬(t ≤ s) :=
   propext Int.not_le.symm
 theorem elim_lt : (t < s) = ¬(t ≥ s) :=
   propext Int.not_le.symm
-theorem elim_gt_add_one {t s : Int} : (t > s) = (t ≥ s + 1) :=
+theorem elim_gt_add_one : (t > s) = (t ≥ s + 1) :=
   propext Int.lt_iff_add_one_le
-theorem elim_lt_add_one {t s : Int} : (t < s) = (s ≥ t + 1) :=
+theorem elim_lt_add_one : (t < s) = (s ≥ t + 1) :=
   propext Int.lt_iff_add_one_le
 theorem elim_leq : (t ≤ s) = (s ≥ t) :=
   propext ge_iff_le
 
-theorem leq_norm {t s : Int} : (t ≤ s) = ¬(t ≥ s + 1) :=
+theorem leq_norm : (t ≤ s) = ¬(t ≥ s + 1) :=
   propext ⟨fun hts => Int.not_le.mpr (Int.add_le_add_right hts _),
            Int.not_lt.mp⟩
 
-theorem geq_tighten {t s : Int} : (¬(t ≥ s)) = (s ≥ t + 1) :=
+theorem geq_tighten : (¬(t ≥ s)) = (s ≥ t + 1) :=
   propext Int.not_le
 
 theorem geq_norm1 : (t ≥ s) = (t - s ≥ 0) :=
@@ -961,20 +1052,61 @@ theorem refl_geq : (t ≥ t) = True :=
 theorem refl_gt : (t > t) = False :=
   propext ⟨(Int.lt_irrefl t), False.elim⟩
 
-theorem eq_elim {t s : Int} : (t = s) = (t ≥ s ∧ t ≤ s) :=
+theorem eq_elim : (t = s) = (t ≥ s ∧ t ≤ s) :=
   propext ⟨(· ▸ And.intro (Int.le_refl t) (Int.le_refl t)), fun ⟨hst, hts⟩ => Int.le_antisymm hts hst⟩
 
-theorem plus_flatten : xs + (w + ys) + zs = xs + w + ys + zs :=
-  Int.add_assoc xs w ys ▸ rfl
-
-theorem mult_flatten : xs * (w * ys) * zs = xs * w * ys * zs :=
-  Int.mul_assoc xs w ys ▸ rfl
-
-theorem mult_dist : x * (y + z + ws) = x * y + x * (z + ws) :=
-  Int.add_assoc y z ws ▸ Int.mul_add x y (z + ws) ▸ rfl
-
-theorem abs_elim : (if x < 0 then -x else x) = if x < 0 then -x else x :=
+theorem plus_flatten : Int.addN (xs ++ ([Int.addN (w :: ys)] ++ zs)) = Int.addN (xs ++ (w :: ys ++ zs)) := by
+  simp only [Int.addN_append]
   rfl
+
+theorem mult_flatten : Int.mulN (xs ++ ([Int.mulN (w :: ys)] ++ zs)) = Int.mulN (xs ++ (w :: ys ++ zs)) := by
+  simp only [Int.mulN_append]
+  rfl
+
+theorem abs_elim : x.abs = if x < 0 then -x else x :=
+  rfl
+
+theorem mod_over_mod : c ≠ 0 → Int.addN (ts ++ ([r % c] ++ ss)) % c = Int.addN (ts ++ ([r] ++ ss)) % c := by
+  simp only [Int.addN, Int.addN_append, Int.emod_add_cancel_left, Int.emod_add_cancel_right, Int.emod_emod, implies_true]
+
+theorem divisible_elim {n t : Int} (_ : n ≠ 0) : (n ∣ t) = (t % n = 0) :=
+  propext Int.dvd_iff_emod_eq_zero
+
+-- Absolute value comparisons
+
+theorem abs_eq : (x.abs = y.abs) = (x = y ∨ x = -y) := by
+  cases hx : decide (x < 0) <;> cases hy : decide (y < 0) <;> simp_all [Int.abs] <;> omega
+
+theorem abs_gt : (x.abs > y.abs) = ite (x ≥ 0) (ite (y ≥ 0) (x > y) (x > -y)) (ite (y ≥ 0) (-x > y) (-x > -y)) := by
+  simp only [Int.abs, gt_iff_lt, ge_iff_le, eq_iff_iff] <;> split <;> split <;> split <;> split <;> omega
+
+-- ITE lifting
+
+theorem geq_ite_lift [h : Decidable c] {t s r : Int} : (ite c t s ≥ r) = ite c (t ≥ r) (s ≥ r) := by
+  cases h <;> simp_all
+
+theorem gt_ite_lift [h : Decidable c] {t s r : Int} : (ite c t s > r) = ite c (t > r) (s > r) := by
+  cases h <;> simp_all
+
+theorem leq_ite_lift [h : Decidable c] {t s r : Int} : (ite c t s ≤ r) = ite c (t ≤ r) (s ≤ r) := by
+  cases h <;> simp_all
+
+theorem lt_ite_lift [h : Decidable c] {t s r : Int} : (ite c t s < r) = ite c (t < r) (s < r) := by
+  cases h <;> simp_all
+
+-- min/max rules
+
+theorem min_lt1 : (ite (t < s) t s ≤ t) = True := by
+  cases h : decide (t < s) <;> simp_all [Int.not_lt.mp]
+
+theorem min_lt2 : (ite (t < s) t s ≤ s) = True := by
+  cases h : decide (t < s) <;> simp_all [Int.le_of_lt]
+
+theorem max_geq1 : (ite (t ≥ s) t s ≥ t) = True := by
+  cases h : decide (t ≥ s) <;> simp_all [Int.le_of_not_le]
+
+theorem max_geq2 : (ite (t ≥ s) t s ≥ s) = True := by
+  cases h : decide (t ≥ s) <;> simp_all
 
 end Smt.Reconstruct.Int.Rewrite
 
@@ -1211,7 +1343,6 @@ theorem cnfAndNeg : orN (andN l :: notN l) := by
   cases l with
   | nil => trivial
   | cons l ls =>
-    simp only [orN]
     apply cnfAndNeg'
 
 theorem cnfAndPos : ∀ (l : List Prop) (i : Nat), ¬ (andN l) ∨ List.getD l i True :=
@@ -2577,10 +2708,10 @@ protected def pow (m : Rat) : Nat → Rat
   | 0 => 1
   | n + 1 => Rat.pow m n * m
 
-def ceil' (r : Rat) := -((-r).floor)
-
 instance : NatPow Rat where
   pow := Rat.pow
+
+def ceil' (r : Rat) := -((-r).floor)
 
 theorem num_divInt_den (q : Rat) : q.num /. q.den = q :=
   divInt_self _
@@ -2661,10 +2792,10 @@ theorem eq_iff_mul_eq_mul {p q : Rat} : p = q ↔ p.num * q.den = q.num * p.den 
     · rw [← Int.natCast_zero, Ne, Int.ofNat_inj]
       apply den_nz
 
-protected theorem not_le {q' : Rat} : ¬q ≤ q' ↔ q' < q := by
+protected theorem not_le {q q' : Rat} : ¬q ≤ q' ↔ q' < q := by
   exact (Bool.not_eq_false _).to_iff
 
-protected theorem not_lt {q' : Rat} : ¬q < q' ↔ q' ≤ q := by
+protected theorem not_lt {q q' : Rat} : ¬q < q' ↔ q' ≤ q := by
   rw [not_congr (Rat.not_le (q := q') (q' := q)) |>.symm]
   simp only [Decidable.not_not]
 
@@ -2820,6 +2951,7 @@ theorem num_neg : q.num < 0 ↔ q < 0 := by
 theorem num_neg_eq_neg_num (q : Rat) : (-q).num = -q.num :=
   rfl
 
+@[simp]
 protected theorem le_refl : x ≤ x := by
   simp [Rat.le_iff_blt, Rat.blt]
   if h : x = 0 then
@@ -2838,7 +2970,7 @@ protected theorem le_of_lt : x < y → x ≤ y := by
   intro h_lt
   apply Decidable.byContradiction
   intro h
-  let _ := (Rat.not_le x).mp h
+  let _ := Rat.not_le.mp h
   let _ := Rat.lt_asymm h_lt
   contradiction
 
@@ -3172,6 +3304,34 @@ protected theorem zero_div (a : Rat) : 0 / a = 0 := by
 protected theorem add_div (a b c : Rat) : (a + b) / c = a / c + b / c := by
   simp [div_def, Rat.add_mul]
 
+def addN : List Rat → Rat
+  | []      => 0
+  | [x]     => x
+  | x :: xs => x + addN xs
+
+@[simp] theorem addN_append : addN (xs ++ ys) = addN xs + addN ys := by
+  match xs, ys with
+  | [], _
+  | [x], []
+  | [x], y :: ys       => simp [addN]
+  | x₁ :: x₂ :: xs, ys =>
+    rw [List.cons_append, addN, addN, addN_append, Rat.add_assoc]
+    all_goals (intro h; nomatch h)
+
+def mulN : List Rat → Rat
+  | []      => 1
+  | [x]     => x
+  | x :: xs => x * mulN xs
+
+@[simp] theorem mulN_append : mulN (xs ++ ys) = mulN xs * mulN ys := by
+  match xs, ys with
+  | [], _
+  | [x], []
+  | [x], y :: ys       => simp [mulN]
+  | x₁ :: x₂ :: xs, ys =>
+    rw [List.cons_append, mulN, mulN, mulN_append, Rat.mul_assoc]
+    all_goals (intro h; nomatch h)
+
 end Rat
 
 namespace Smt.Reconstruct.Rat.PolyNorm
@@ -3257,7 +3417,7 @@ theorem foldl_mul_insert {ctx : Context} :
   List.foldl (fun z a => z * (ctx a)) 1 (mul.insert y ys) =
   (ctx y) * List.foldl (fun z a => z * (ctx a)) 1 ys := by
   induction ys with
-  | nil => simp [List.foldl]
+  | nil => simp [mul.insert]
   | cons x ys ih =>
     by_cases h : y ≤ x
     · simp [mul.insert, h, foldl_assoc Rat.mul_assoc (ctx y) (ctx x), Rat.mul_assoc]
@@ -3522,22 +3682,24 @@ section le_lt_defs
 
 variable {x y : Rat}
 
-theorem Rat.le_total (a b : Rat) : a ≤ b ∨ b ≤ a := by
+theorem le_total (a b : Rat) : a ≤ b ∨ b ≤ a := by
   simpa only [← Rat.le_iff_sub_nonneg, Rat.neg_sub] using Rat.nonneg_total (b - a)
 
-theorem Rat.lt_iff_le_not_le (a b : Rat) : a < b ↔ a ≤ b ∧ ¬b ≤ a := by
+theorem le_of_not_le {a b : Rat} : ¬ a ≤ b → b ≤ a := (Rat.le_total a b).resolve_left
+
+theorem lt_iff_le_not_le (a b : Rat) : a < b ↔ a ≤ b ∧ ¬b ≤ a := by
   rw [← Rat.not_le]
   refine Iff.symm ((and_iff_right_of_imp (a := a ≤ b) (b := ¬ b ≤ a)) ?_)
   intro h
-  cases Rat.le_total a b with
+  cases le_total a b with
   | inl hl => exact hl
   | inr hr => exact False.elim (h hr)
 
-theorem Rat.neg_self_add (c : Rat) : -c + c = 0 := by
+theorem neg_self_add (c : Rat) : -c + c = 0 := by
   simp [Rat.add_def]
   exact Int.add_left_neg _
 
-theorem Rat.le_antisymm {a b : Rat} (hab : a ≤ b) (hba : b ≤ a) : a = b := by
+theorem le_antisymm {a b : Rat} (hab : a ≤ b) (hba : b ≤ a) : a = b := by
   rw [Rat.le_iff_sub_nonneg] at hab hba
   rw [Rat.sub_eq_add_neg] at hba
   rw [← Rat.neg_sub, Rat.sub_eq_add_neg] at hab
@@ -3590,10 +3752,6 @@ protected theorem divInt_lt_divInt
 
 variable {x y : Rat}
 
-theorem neg_self_add (c : Rat) : -c + c = 0 := by
-  simp [Rat.add_def]
-  exact Int.add_left_neg _
-
 theorem add_sub_add_left_eq_sub (a b c : Rat) : c + a - (c + b) = a - b := by
   rw [ Rat.sub_eq_add_neg,
        Rat.add_assoc c a (-(c + b)),
@@ -3613,29 +3771,10 @@ theorem add_le_add_left {a b c : Rat} : c + a ≤ c + b ↔ a ≤ b := by
 theorem add_lt_add_left {a b c : Rat} : c + a < c + b ↔ a < b := by
   rw [Rat.lt_iff_sub_pos, Rat.add_sub_add_left_eq_sub, ← Rat.lt_iff_sub_pos]
 
-protected theorem le_antisymm (hxy : x ≤ y) (hyx : y ≤ x) : x = y := by
-    rw [Rat.le_iff_sub_nonneg] at hxy hyx
-    rw [Rat.sub_eq_add_neg] at hyx
-    rw [← Rat.neg_sub, Rat.sub_eq_add_neg] at hxy
-    have := Rat.eq_neg_of_add_eq_zero_left _ _ (Rat.nonneg_antisymm _ hyx hxy)
-    rwa [Rat.neg_neg] at this
-
 protected theorem le_def : x ≤ y ↔ x.num * y.den ≤ y.num * x.den := by
   rw [← num_divInt_den y, ← num_divInt_den x]
   conv => rhs ; simp only [num_divInt_den]
   exact Rat.divInt_le_divInt (mod_cast x.den_pos) (mod_cast y.den_pos)
-
-theorem le_total : x ≤ y ∨ y ≤ x := by
-  simp [Rat.le_def]
-  omega
-
-theorem lt_iff_le_not_le {a b : Rat} : a < b ↔ a ≤ b ∧ ¬b ≤ a := by
-  rw [← Rat.not_le]
-  refine Iff.symm ((and_iff_right_of_imp (a := a ≤ b) (b := ¬ b ≤ a)) ?_)
-  intro h
-  cases Rat.le_total a b with
-  | inl hl => exact hl
-  | inr hr => exact False.elim (h hr)
 
 protected theorem lt_iff_le_and_ne : x < y ↔ x ≤ y ∧ x ≠ y := ⟨
   fun h => ⟨Rat.le_of_lt _ _ h, Rat.ne_of_lt _ _ h⟩,
@@ -3658,6 +3797,11 @@ protected theorem lt_def : x < y ↔ x.num * y.den < y.num * x.den := by
   exact Decidable.not_iff_not.mpr Rat.eq_iff_mul_eq_mul
 
 end le_lt_defs
+
+theorem floor_le_self (r : Rat) : r.floor ≤ r := Rat.le_floor.mp (Int.le_refl r.floor)
+
+theorem self_le_floor_add_one (r : Rat) : r < ↑(r.floor + 1) := by
+  sorry
 
 end Rat
 
@@ -3798,11 +3942,11 @@ theorem le_trans (hab : a ≤ b) (hbc : b ≤ c) : a ≤ c := by
   rw [<- Rat.sub_eq_add_neg] at this
   exact (Rat.le_iff_sub_nonneg a c).mpr this
 
-theorem lt_of_le_not_le (hab : a ≤ b) (hba : ¬ b ≤ a) : a < b := Rat.lt_iff_le_not_le.mpr ⟨hab, hba⟩
+theorem lt_of_le_not_le (hab : a ≤ b) (hba : ¬ b ≤ a) : a < b := (Rat.lt_iff_le_not_le _ _).mpr ⟨hab, hba⟩
 
-theorem le_of_lt (hab : a < b) : a ≤ b := (Rat.lt_iff_le_not_le.1 hab).1
+theorem le_of_lt (hab : a < b) : a ≤ b := ((Rat.lt_iff_le_not_le _ _).1 hab).1
 
-theorem not_le_of_lt (hab : a < b) : ¬ b ≤ a := (Rat.lt_iff_le_not_le.1 hab).2
+theorem not_le_of_lt (hab : a < b) : ¬ b ≤ a := ((Rat.lt_iff_le_not_le _ _).1 hab).2
 
 theorem lt_of_lt_of_le (hab : a < b) (hbc : b ≤ c) : a < c :=
   lt_of_le_not_le (le_trans (le_of_lt hab) hbc) fun hca ↦ not_le_of_lt hab (le_trans hbc hca)
@@ -3899,14 +4043,12 @@ theorem neg_le_neg : a ≤ b → -a ≥ -b :=
       rw [Int.add_comm, <- Int.sub_eq_add_neg]
       exact h'
 
-theorem Int.floor_le (r : Rat) : r.floor ≤ r := Rat.le_floor.mp (Int.le_refl r.floor)
-
 theorem int_tight_lb {i : Int} (h : i > c) : i ≥ c.floor + 1 := by
   cases Int.lt_trichotomy i (c.floor + 1) with
   | inl iltc =>
     have ilec := (Int.lt_iff_add_one_le).mp iltc
     have h2 : i ≤ c.floor := by exact (Int.add_le_add_iff_right 1).mp iltc
-    have c_le_floor := Int.floor_le c
+    have c_le_floor := Rat.floor_le_self c
     have : i ≤ c := Rat.le_trans (Rat.cast_le.mp h2) c_le_floor
     have abs := Rat.lt_of_le_of_lt this h
     apply False.elim
@@ -3930,7 +4072,7 @@ theorem int_tight_ub {i : Int} (h : i < c) : i ≤ c.ceil' - 1 := by
   exact pf
 
 theorem trichotomy₁ (h₁ : a ≤ b) (h₂ : a ≠ b) : a < b := by
-  refine (Rat.not_le _).mp ?_
+  refine Rat.not_le.mp ?_
   intro abs
   have h := Rat.le_antisymm h₁ abs
   exact h₂ h
@@ -4055,7 +4197,7 @@ theorem neg_of_mul_pos (a b : Rat) : a < 0 → 0 < a * b → b < 0 := by
   intros h1 h2
   apply Classical.byContradiction
   intro h3
-  have : 0 ≤ b := (Rat.not_lt _).mp h3
+  have : 0 ≤ b := Rat.not_lt.mp h3
   cases (Rat.le_iff_eq_or_lt 0 b).mp this with
   | inl heq => rw [<-heq, Rat.mul_zero] at h2; exact Rat.lt_irrefl _ h2
   | inr hlt => have := mul_sign₃ h1 hlt; have := Rat.lt_trans h2 this; exact Rat.lt_irrefl _ this
@@ -4560,26 +4702,19 @@ open Function
 
 -- https://github.com/cvc5/cvc5/blob/main/src/theory/arith/rewrites
 
-variable {t ts x xs : Rat}
-
-theorem plus_zero : ts + 0 + ss = ts + ss := by simp
-
-
-theorem mul_one : ts * 1 * ss = ts * ss :=
-  (_root_.Rat.mul_one ts).symm ▸ rfl
-theorem mul_zero : ts * 0 * ss = 0 :=
-  (_root_.Rat.mul_zero ts).symm ▸ (Rat.zero_mul ss).symm ▸ rfl
+variable {t s x : Rat}
 
 theorem div_total : s ≠ 0 → t / s = t / s :=
   const _ rfl
-theorem div_total_zero : x / 0 = 0 :=
-  Rat.div_def x 0 ▸ Rat.inv_zero.symm ▸ Rat.mul_zero x
+theorem div_total_zero : t / 0 = 0 :=
+  Rat.div_def t 0 ▸ Rat.inv_zero.symm ▸ Rat.mul_zero t
 
 -- Eliminations
+
 theorem elim_gt : (t > s) = ¬(t ≤ s) :=
-  propext (Rat.not_le _).symm
+  propext Rat.not_le.symm
 theorem elim_lt : (t < s) = ¬(t ≥ s) :=
-  propext (Rat.not_le _).symm
+  propext Rat.not_le.symm
 theorem elim_leq : (t ≤ s) = (s ≥ t) :=
   propext ge_iff_le
 
@@ -4602,25 +4737,81 @@ theorem refl_geq : (t ≥ t) = True :=
 theorem refl_gt : (t > t) = False :=
   propext ⟨(Rat.lt_irrefl t), False.elim⟩
 
-example (p q : Prop) : (p ∧ q) ↔ (q ∧ p) := by
-  apply And.comm
-
 theorem eq_elim : (t = s) = (t ≥ s ∧ t ≤ s) := by
   apply propext
   rw [←elim_leq, And.comm]
   exact Rat.le_antisymm_iff _ _
 
-theorem plus_flatten : xs + (w + ys) + zs = xs + w + ys + zs := by
-  simp [Rat.add_assoc]
-
-theorem mult_flatten : xs * (w * ys) * zs = xs * w * ys * zs := by
-  simp [Rat.mul_assoc]
-
-theorem mult_dist : x * (y + z + ws) = x * y + x * (z + ws) := by
-  simp [Rat.mul_add, Rat.add_assoc]
-
-theorem abs_elim : (if x < 0 then -x else x) = if x < 0 then -x else x :=
+theorem plus_flatten : Rat.addN (xs ++ ([Rat.addN (w :: ys)] ++ zs)) = Rat.addN (xs ++ (w :: ys ++ zs)) := by
+  simp only [Rat.addN_append]
   rfl
+
+theorem mult_flatten : Rat.mulN (xs ++ ([Rat.mulN (w :: ys)] ++ zs)) = Rat.mulN (xs ++ (w :: ys ++ zs)) := by
+  simp only [Rat.mulN_append]
+  rfl
+
+theorem abs_elim : x.abs = if x < 0 then -x else x :=
+  rfl
+
+theorem eq_conflict {t : Int} {c : Rat} (hcc : ↑c.floor ≠ c) : (t = c) = False := by
+  simp only [eq_iff_iff, iff_false]
+  intro htc
+  have hcc : c.floor < c := ((Rat.le_iff_eq_or_lt c.floor c).mp (Rat.floor_le_self c)).resolve_left hcc
+  cases Int.lt_trichotomy t c.floor <;> rename_i htcf
+  · have hntc : ↑t ≠ c := (Rat.lt_iff_le_and_ne.mp (Rat.lt_trans (Rat.cast_lt2 htcf) hcc)).right
+    contradiction
+  · cases htcf <;> rename_i htcf
+    · simp_all
+    · have h : c < t := by
+        apply @Rat.lt_of_lt_of_le _ _ _
+        · exact Rat.self_le_floor_add_one c
+        · exact Rat.cast_le2 htcf
+      simp_all [Rat.lt_irrefl]
+
+theorem geq_tighten {t : Int} {c : Rat} {cc : Int} (h : ↑c.floor ≠ c ∧ cc = c.floor + 1) : (t ≥ c) = (t ≥ cc) := by
+  have Int.floor_lt {z : Int} {a : Rat} : a.floor < z ↔ a < ↑z := sorry
+  simp only [h.right, ge_iff_le, eq_iff_iff, Rat.le_iff_eq_or_lt, ← Int.floor_lt]
+  have h : ↑t ≠ c := by simpa [Eq.symm] using eq_conflict h.left
+  apply Iff.intro <;> intro hct <;> rename_i hct
+  · have h := hct.resolve_left h.symm
+    omega
+  · omega
+
+-- Absolute value comparisons
+
+theorem abs_eq : (x.abs = y.abs) = (x = y ∨ x = -y) := by
+  cases hx : decide (x < 0) <;> cases hy : decide (y < 0) <;> simp_all [Rat.abs] <;> sorry
+
+theorem abs_gt : (x.abs > y.abs) = ite (x ≥ 0) (ite (y ≥ 0) (x > y) (x > -y)) (ite (y ≥ 0) (-x > y) (-x > -y)) := by
+  simp only [Rat.abs, gt_iff_lt, ge_iff_le, eq_iff_iff] <;> split <;> split <;> split <;> split <;> sorry
+
+-- ITE lifting
+
+theorem geq_ite_lift [h : Decidable c] {t s r : Rat} : (ite c t s ≥ r) = ite c (t ≥ r) (s ≥ r) := by
+  cases h <;> simp_all
+
+theorem gt_ite_lift [h : Decidable c] {t s r : Rat} : (ite c t s > r) = ite c (t > r) (s > r) := by
+  cases h <;> simp_all
+
+theorem leq_ite_lift [h : Decidable c] {t s r : Rat} : (ite c t s ≤ r) = ite c (t ≤ r) (s ≤ r) := by
+  cases h <;> simp_all
+
+theorem lt_ite_lift [h : Decidable c] {t s r : Rat} : (ite c t s < r) = ite c (t < r) (s < r) := by
+  cases h <;> simp_all
+
+-- min/max rules
+
+theorem min_lt1 : (ite (t < s) t s ≤ t) = True := by
+  cases h : decide (t < s) <;> simp_all [Rat.not_lt.mp]
+
+theorem min_lt2 : (ite (t < s) t s ≤ s) = True := by
+  cases h : decide (t < s) <;> simp_all [Rat.le_of_lt]
+
+theorem max_geq1 : (ite (t ≥ s) t s ≥ t) = True := by
+  cases h : decide (t ≥ s) <;> simp_all [Rat.le_of_not_le]
+
+theorem max_geq2 : (ite (t ≥ s) t s ≥ s) = True := by
+  cases h : decide (t ≥ s) <;> simp_all
 
 end Smt.Reconstruct.Rat.Rewrite
 
